@@ -36,6 +36,7 @@ RUNTIME_ENV=${RUNTIME_ENV:-"${WORKING_DIR}/verl/trainer/runtime_env.yaml"}
 NNODES=${NNODES:-1}
 # Paths
 MODEL_PATH=${MODEL_PATH:-"Qwen/Qwen3-1.7B"}
+CKPTS_DIR=${CKPTS_DIR:-"${WORKING_DIR}/ckpts/${project_name}/${exp_name}"}
 TRAIN_FILE=${TRAIN_FILE:-"${WORKING_DIR}/data/dapo-math-17k.parquet"}
 TEST_FILE=${TEST_FILE:-"${WORKING_DIR}/data/aime-2024.parquet"}
 
@@ -121,4 +122,5 @@ python3 -m recipe.dapo.main_dapo \
     trainer.test_freq=5 \
     trainer.save_freq=5 \
     trainer.total_epochs=1 \
+    trainer.default_local_dir="${CKPTS_DIR}" \
     trainer.resume_mode=auto
