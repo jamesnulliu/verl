@@ -31,11 +31,13 @@ n_resp_per_prompt=16
 train_prompt_mini_bsz=32
 
 # Ray
+RAY_ADDRESS=${RAY_ADDRESS:-"http://localhost:8265"}
 WORKING_DIR=${WORKING_DIR:-"${PWD}"}
 RUNTIME_ENV=${RUNTIME_ENV:-"${WORKING_DIR}/verl/trainer/runtime_env.yaml"}
 NNODES=${NNODES:-1}
 # Paths
-MODEL_PATH=${MODEL_PATH:-"Qwen/Qwen3-1.7B"}
+RAY_DATA_HOME=${RAY_DATA_HOME:-"${WORKING_DIR}"}
+MODEL_PATH=${MODEL_PATH:-"Qwen/Qwen3-1.7B-Base"}
 CKPTS_DIR=${CKPTS_DIR:-"${WORKING_DIR}/ckpts/${project_name}/${exp_name}"}
 TRAIN_FILE=${TRAIN_FILE:-"${WORKING_DIR}/data/dapo-math-17k.parquet"}
 TEST_FILE=${TEST_FILE:-"${WORKING_DIR}/data/aime-2024.parquet"}
@@ -54,7 +56,9 @@ infer_ppo_max_token_len=$((max_prompt_length + max_response_length))
 offload=True
 gen_tp=4
 
-python3 -m recipe.dapo.main_dapo \
+ray job submit --no-wait --runtime-env="${RUNTIME_ENV}" \
+    --working-dir "${WORKING_DIR}" \
+    -- python3 -m recipe.dapo.main_dapo \
     data.train_files="${TRAIN_FILE}" \
     data.val_files="${TEST_FILE}" \
     data.prompt_key=prompt \
