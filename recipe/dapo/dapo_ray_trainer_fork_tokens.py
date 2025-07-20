@@ -277,9 +277,9 @@ class RayDAPOTrainer(RayPPOTrainer):
                         entropys = old_log_prob.batch["entropys"]
                         # Filter out low-entropy tokens if enabled
                         if self.config.algorithm.filter_fork_tokens.enable:
-                            filter_method = self.config.algorithm.filter_fork_tokens.method
-                            if filter_method == "entropy-percentage":
-                                keep_percentage = self.config.algorithm.filter_fork_tokens.keep_percentage
+                            filter_method = self.config.algorithm.filter_fork_tokens.method_name
+                            if filter_method == "entropy-top-ratio":
+                                keep_percentage = self.config.algorithm.filter_fork_tokens.gate
                                 thresholds = torch.quantile(entropys, 1.0 - keep_percentage, dim=-1, keepdim=True)
                                 token_mask = entropys >= thresholds
                             else:

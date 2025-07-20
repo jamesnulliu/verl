@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -xeuo pipefail
 
-project_name='DAPO'
-exp_name='DAPO-Qwen3-1.7B'
+project_name='DAPO-fork'
+exp_name='DAPO-fork-Qwen3-1.7B-base'
 
 adv_estimator=grpo
 
@@ -24,6 +24,9 @@ loss_agg_mode="token-mean"
 
 enable_filter_groups=True
 filter_groups_metric=acc
+filter_fork_tokens_enable=True
+filter_fork_tokens_method_name=entropy-top-ratio
+filter_fork_tokens_gate=0.2
 max_num_gen_batches=10
 train_prompt_bsz=256
 gen_prompt_bsz=$((train_prompt_bsz * 3))
@@ -79,6 +82,9 @@ ray job submit --no-wait --runtime-env="${RUNTIME_ENV}" \
     algorithm.filter_groups.enable=${enable_filter_groups} \
     algorithm.filter_groups.max_num_gen_batches=${max_num_gen_batches} \
     algorithm.filter_groups.metric=${filter_groups_metric} \
+    algorithm.filter_fork_tokens.enable=${filter_fork_tokens_enable} \
+    algorithm.filter_fork_tokens.method_name=${filter_fork_tokens_method_name} \
+    algorithm.filter_fork_tokens.gate=${filter_fork_tokens_gate} \
     actor_rollout_ref.model.use_remove_padding=True \
     actor_rollout_ref.actor.use_dynamic_bsz=${use_dynamic_bsz} \
     actor_rollout_ref.ref.log_prob_use_dynamic_bsz=${use_dynamic_bsz} \
