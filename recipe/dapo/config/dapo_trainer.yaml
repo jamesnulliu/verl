@@ -23,6 +23,11 @@ algorithm:
     enable: False # We try to avoid forgetting to set enable
     metric: null # acc / score / seq_reward / seq_final_reward / ...
     max_num_gen_batches: 0 # Non-positive values mean no upper limit
+  filter_fork_tokens:
+    _target_: verl.trainer.config.FilterForkTokensConfig
+    enable: False 
+    metric: null 
+    gate: 2.0
 
 trainer:
   project_name: verl-dapo

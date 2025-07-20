@@ -275,6 +275,17 @@ class RayDAPOTrainer(RayPPOTrainer):
                     with marked_timer("old_log_prob", timing_raw, "blue"):
                         old_log_prob = self.actor_rollout_wg.compute_log_prob(batch)
                         entropys = old_log_prob.batch["entropys"]
+                        # Filter out low-entropy tokens if enabled
+                        if self.config.algorithm.filter_fork_tokens.enable:
+                            filter_fork_metric = self.config.algorithm.filter_fork_tokens.metric
+                            if filter_fork_metric == "entropy-top-ratio":
+                                keep_percentage = self.config.algorithm.filter_fork_tokens.gate
+                                thresholds = torch.quantile(entropys, 1.0 - keep_percentage, dim=-1, keepdim=True)
+                                token_mask = entropys >= thresholds
+                            else:
+                                raise ValueError(f"Unknown filter method: {filter_fork_metric}")
+                            # Update response mask to mask out low-entropy tokens
+                            batch.batch["response_mask"][~token_mask] = 0.0
                         response_masks = batch.batch["response_mask"]
                         loss_agg_mode = self.config.actor_rollout_ref.actor.loss_agg_mode
                         entropy_agg = agg_loss(loss_mat=entropys, loss_mask=response_masks, loss_agg_mode=loss_agg_mode)
