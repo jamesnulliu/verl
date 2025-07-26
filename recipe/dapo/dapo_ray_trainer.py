@@ -278,12 +278,19 @@ class RayDAPOTrainer(RayPPOTrainer):
                         # Filter out low-entropy tokens if enabled
                         if self.config.algorithm.filter_fork_tokens.enable:
                             filter_fork_metric = self.config.algorithm.filter_fork_tokens.metric
+                            metrics.update({"num_original_tokens": torch.sum(batch.batch["response_mask"]).item()})
                             if filter_fork_metric == "entropy-top-ratio":
                                 keep_percentage = self.config.algorithm.filter_fork_tokens.gate
                                 thresholds = torch.quantile(entropys, 1.0 - keep_percentage, dim=-1, keepdim=True)
                                 token_mask = entropys >= thresholds
                             else:
                                 raise ValueError(f"Unknown filter method: {filter_fork_metric}")
+                            metrics.update(
+                                {
+                                    "num_filtered_tokens": torch.sum(~token_mask).item(),
+                                    "num_kept_tokens": torch.sum(token_mask).item(),
+                                }
+                            )
                             # Update response mask to mask out low-entropy tokens
                             batch.batch["response_mask"][~token_mask] = 0.0
                         response_masks = batch.batch["response_mask"]
@@ -293,6 +300,7 @@ class RayDAPOTrainer(RayPPOTrainer):
                         metrics.update(old_log_prob_metrics)
                         old_log_prob.batch.pop("entropys")
                         batch = batch.union(old_log_prob)
+                        metrics.update({"num_processed_tokens": torch.sum(batch.batch["response_mask"]).item()})
 
                     if self.use_reference_policy:
                         # compute reference log_prob

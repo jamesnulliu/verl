@@ -20,6 +20,7 @@ import socket
 
 import hydra
 import ray
+import torch
 from omegaconf import OmegaConf
 
 from verl.trainer.ppo.reward import get_custom_reward_fn
@@ -27,6 +28,7 @@ from verl.utils.device import is_cuda_available
 
 from .dapo_ray_trainer import RayDAPOTrainer
 
+torch.compiler.reset()
 
 @hydra.main(config_path="config", config_name="dapo_trainer", version_base=None)
 def main(config):

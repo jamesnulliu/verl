@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -xeuo pipefail
 
-project_name='DAPO-fork'
+project_name='DAPO'
 exp_name='DAPO-fork-Qwen3-1.7B-base'
 
 adv_estimator=grpo
