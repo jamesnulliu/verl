@@ -275,24 +275,32 @@ class RayDAPOTrainer(RayPPOTrainer):
                     with marked_timer("old_log_prob", timing_raw, "blue"):
                         old_log_prob = self.actor_rollout_wg.compute_log_prob(batch)
                         entropys = old_log_prob.batch["entropys"]
+                        orig_rep_mask = batch.batch["response_mask"].clone().bool()
                         # Filter out low-entropy tokens if enabled
                         if self.config.algorithm.filter_fork_tokens.enable:
                             filter_fork_metric = self.config.algorithm.filter_fork_tokens.metric
-                            metrics.update({"num_original_tokens": torch.sum(batch.batch["response_mask"]).item()})
+                            num_original_tokens = torch.sum(orig_rep_mask).item()
+                            metrics.update({"actor/num_original_tokens": num_original_tokens})
                             if filter_fork_metric == "entropy-top-ratio":
                                 keep_percentage = self.config.algorithm.filter_fork_tokens.gate
-                                thresholds = torch.quantile(entropys, 1.0 - keep_percentage, dim=-1, keepdim=True)
-                                token_mask = entropys >= thresholds
+                                valid_entropies = entropys[orig_rep_mask]
+                                if valid_entropies.numel() > 0:
+                                    threshold = torch.quantile(valid_entropies, 1.0 - keep_percentage)
+                                else:
+                                    threshold = 0.0
+                                token_mask = entropys >= threshold
                             else:
                                 raise ValueError(f"Unknown filter method: {filter_fork_metric}")
+                            final_keep_mask = token_mask & orig_rep_mask
                             metrics.update(
                                 {
-                                    "num_filtered_tokens": torch.sum(~token_mask).item(),
-                                    "num_kept_tokens": torch.sum(token_mask).item(),
+                                    "actor/num_filtered_tokens": num_original_tokens
+                                    - torch.sum(final_keep_mask).item(),
+                                    "actor/num_kept_tokens": torch.sum(final_keep_mask).item(),
                                 }
                             )
                             # Update response mask to mask out low-entropy tokens
-                            batch.batch["response_mask"][~token_mask] = 0.0
+                            batch.batch["response_mask"][~final_keep_mask] = 0.0
                         response_masks = batch.batch["response_mask"]
                         loss_agg_mode = self.config.actor_rollout_ref.actor.loss_agg_mode
                         entropy_agg = agg_loss(loss_mat=entropys, loss_mask=response_masks, loss_agg_mode=loss_agg_mode)
@@ -300,7 +308,7 @@ class RayDAPOTrainer(RayPPOTrainer):
                         metrics.update(old_log_prob_metrics)
                         old_log_prob.batch.pop("entropys")
                         batch = batch.union(old_log_prob)
-                        metrics.update({"num_processed_tokens": torch.sum(batch.batch["response_mask"]).item()})
+                        metrics.update({"actor/num_processed_tokens": torch.sum(batch.batch["response_mask"]).item()})
 
                     if self.use_reference_policy:
                         # compute reference log_prob
