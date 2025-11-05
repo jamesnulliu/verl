@@ -897,7 +897,7 @@ def run_sft(config):
     destroy_global_process_group()
 
 
-@hydra.main(config_path="config", config_name="sft_trainer", version_base=None)
+@hydra.main(config_path="config", config_name="soft-thinking_sft_trainer", version_base=None)
 def main(config):
     run_sft(config)
 

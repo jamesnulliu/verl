@@ -51,8 +51,8 @@ use_remove_padding: False
 trainer:
   default_local_dir: checkpoints/${trainer.project_name}/${trainer.experiment_name}
   default_hdfs_dir: null
-  project_name: gsm8k-sft
-  experiment_name: test
+  project_name: STPO
+  experiment_name: sft-test
   total_epochs: 4
   total_training_steps: null
   logger: [ 'console', 'wandb' ]
