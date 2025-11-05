@@ -853,6 +853,7 @@ def create_sft_dataset(data_paths, data_config, tokenizer, max_samples=-1):
     else:
         dataset_cls = SFTDataset
 
+    print(f"Using dataset class: {dataset_cls.__name__}")
     # Create datasets based on the selected class
     dataset = dataset_cls(parquet_files=data_paths, tokenizer=tokenizer, config=data_config, max_samples=max_samples)
     return dataset
