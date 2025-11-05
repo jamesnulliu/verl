@@ -22,6 +22,7 @@ data:
   apply_chat_template_kwargs: 
     enable_thinking: true
   balance_dp_token: False
+  custom_cls: NULL
 model:
   partial_pretrain:  ~/.cache/huggingface/hub/models--Qwen--Qwen3-4B/snapshots/1cfa9a7208912126459214e8b04321603b3df60c
   use_shm: False
