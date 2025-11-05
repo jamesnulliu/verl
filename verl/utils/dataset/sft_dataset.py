@@ -106,6 +106,7 @@ class SFTDataset(Dataset):
             self.dataframe = self.dataframe.iloc[indices.tolist()]
             print(f"selected {self.max_samples} random samples out of {total}")
 
+        print(f"All keys: {self.dataframe.columns.tolist()}")
         self.prompts = self.dataframe[self.prompt_key]
         for key in self.prompt_dict_keys:
             # type(x): pandas.core.series.Series
