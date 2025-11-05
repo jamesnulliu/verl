@@ -16,7 +16,7 @@ data:
   all_branch_response_tkids_key: all_branch_response_tkids
   thinking_embed_key: thinking_input_embed
   thinking_tkids_key: thinking_tkids
-  thinking_probs_key: thinking_token_probs
+  thinking_probs_key: thinking_probs
   max_length: 10000
   truncation: error
   apply_chat_template_kwargs: 

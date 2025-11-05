@@ -41,7 +41,7 @@ class SoftThinkingSFTDataset(Dataset):
         self.n_thinking_branches = config.get("n_thinking_branches", 10)
         self.thinking_embed_key = config.get("thinking_embed_key", "thinking_input_embed")
         self.thinking_tkids_key = config.get("thinking_tkids_key", "thinking_tkids")
-        self.thinking_probs_key = config.get("thinking_probs_key", "thinking_token_probs")
+        self.thinking_probs_key = config.get("thinking_probs_key", "thinking_probs")
         self.apply_chat_template_kwargs = config.get("apply_chat_template_kwargs", {"enable_thinking": True})
         if isinstance(tokenizer, str):
             tokenizer = hf_tokenizer(tokenizer)
