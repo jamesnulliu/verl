@@ -26,6 +26,7 @@ data:
     path: null
     name: null
   use_shm: False
+  chat_template: null
 model:
   partial_pretrain: NULL
   use_shm: False
