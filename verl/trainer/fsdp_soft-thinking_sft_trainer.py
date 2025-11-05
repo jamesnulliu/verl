@@ -418,29 +418,35 @@ class FSDPSoftThinkingSFTTrainer:
             raise ValueError(f"Unknown lr scheduler: {self.config.optim.lr_scheduler}")
 
     def _compute_loss_and_backward(self, batch, do_backward=True, n_micro_batches=1):
-        """Compute loss with optional sequence parallelism and remove padding features"""
+        """
+        Compute loss with optional sequence parallelism and remove padding features.
+
+        Let B <- batch_size, S <- seq_len, V <- vocab_size, E <- embed_dim, K <- n_branches, T <- think_len
+        """
         use_sp = self.use_remove_padding and self.config.ulysses_sequence_parallel_size > 1
 
+
         # Move inputs to GPU and prepare loss mask
-        # ↓ Shape: (batch_size, seq_len,)
+        # ↓ Shape: (B, S)
         input_tkids = batch["input_tkids"].to(self.device_name)
-        # ↓ Shape: (batch_size, seq_len, embed_dim)
+        # ↓ Shape: (B, S, E)
         thinking_embeds = batch["thinking_embeds"].to(self.device_name)
-        # ↓ Shape: (batch_size, seq_len, n_branches)
+        # ↓ Shape: (B, S, K)
         thinking_tkids = batch["thinking_tkids"].to(self.device_name)
-        # ↓ Shape: (batch_size, seq_len, n_branches)
-        thinking_probs = batch["thinking_probs"].to(self.device_name)
-        # ↓ Shape: (batch_size, seq_len,)
+        # [TODO] We temporarily won't use thinking_probs
+        # ↓ Shape: (B, S, K)
+        ## thinking_probs = batch["thinking_probs"].to(self.device_name)
+        # ↓ Shape: (B, S)
         thinking_mask = batch["thinking_mask"].to(self.device_name)
-        # ↓ Shape: (batch_size, seq_len,)
+        # ↓ Shape: (B, S)
         attention_mask = batch["attention_mask"].to(self.device_name)
-        # ↓ Shape: (batch_size, seq_len,)
+        # ↓ Shape: (B, S)
         position_ids = batch["position_ids"].to(self.device_name)
 
         n_branches = thinking_tkids.shape[-1]
         batch_size, seq_len = input_tkids.shape
 
-        # ↓ Shape: (batch_size, seq_len,)
+        # ↓ Shape: (B, S)
         loss_mask = batch.pop("loss_mask")[:, 1:].reshape(-1).to(self.device_name)
         loss_fct_1 = nn.CrossEntropyLoss(reduction="none").to(self.device_name)
         loss_fct_2 = MultiTokenCrossEntropyLoss(reduction="none").to(self.device_name)

@@ -3,7 +3,7 @@ defaults:
   - _self_
 
 data:
-  train_batch_size: 16
+  train_batch_size: 4
   micro_batch_size: null # will be deprecated, use micro_batch_size_per_gpu
   micro_batch_size_per_gpu: 4 # this is also val batch size
   train_files: ~/Projects/STPO/outputs/tree_search/Qwen3-4B-Think/math_level-4/sft_dataset_cutoff/train

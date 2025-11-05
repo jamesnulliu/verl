@@ -106,7 +106,7 @@ class SoftThinkingSFTDataset(Dataset):
             # No truncation, so we use the original thinking data
             data_thinking_embeds = original_thinking_embed_tensor
             data_thinking_tkids = original_thinking_tkids_tensor
-            data_thinking_probs = original_thinking_probs_tensor
+            # data_thinking_probs = original_thinking_probs_tensor
 
         elif sequence_length > self.max_length:
             if self.truncation == "left":
@@ -137,13 +137,13 @@ class SoftThinkingSFTDataset(Dataset):
             # Select the surviving thinking data
             data_thinking_embeds = original_thinking_embed_tensor[surviving_indices_mask]
             data_thinking_tkids = original_thinking_tkids_tensor[surviving_indices_mask]
-            data_thinking_probs = original_thinking_probs_tensor[surviving_indices_mask]
+            # data_thinking_probs = original_thinking_probs_tensor[surviving_indices_mask]
         
         else: # sequence_length == self.max_length
             # No padding or truncation needed
             data_thinking_embeds = original_thinking_embed_tensor
             data_thinking_tkids = original_thinking_tkids_tensor
-            data_thinking_probs = original_thinking_probs_tensor
+            # data_thinking_probs = original_thinking_probs_tensor
         
         # Initialize with zeros
         padded_thinking_embeds = torch.zeros(
@@ -154,10 +154,10 @@ class SoftThinkingSFTDataset(Dataset):
             self.max_length, original_thinking_tkids_tensor.size(1),
             dtype=original_thinking_tkids_tensor.dtype
         )
-        padded_thinking_probs = torch.zeros(
-            self.max_length, original_thinking_probs_tensor.size(1),
-            dtype=original_thinking_probs_tensor.dtype
-        )
+        # padded_thinking_probs = torch.zeros(
+        #     self.max_length, original_thinking_probs_tensor.size(1),
+        #     dtype=original_thinking_probs_tensor.dtype
+        # )
         
         # Use the final thinking_mask to scatter the (potentially truncated) data
         if data_thinking_embeds.size(0) > 0:
@@ -167,7 +167,7 @@ class SoftThinkingSFTDataset(Dataset):
 
             padded_thinking_embeds[thinking_mask == 1] = data_thinking_embeds
             padded_thinking_tkids[thinking_mask == 1] = data_thinking_tkids
-            padded_thinking_probs[thinking_mask == 1] = data_thinking_probs
+            # padded_thinking_probs[thinking_mask == 1] = data_thinking_probs
             
         # --- MODIFICATION END ---
 
@@ -187,8 +187,8 @@ class SoftThinkingSFTDataset(Dataset):
             "thinking_embeds": padded_thinking_embeds,
             # ↓ Shape: (seq_len, n_branches)
             "thinking_tkids": padded_thinking_tkids,
-            # ↓ Shape: (seq_len, n_branches)
-            "thinking_probs": padded_thinking_probs,
+            # # ↓ Shape: (seq_len, n_branches)
+            # "thinking_probs": padded_thinking_probs,
             # ↓ Shape: (seq_len,)
             "thinking_mask": thinking_mask,
             # ↓ Shape: (seq_len,)
