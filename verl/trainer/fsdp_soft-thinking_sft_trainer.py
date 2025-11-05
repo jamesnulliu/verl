@@ -85,6 +85,9 @@ class MultiTokenCrossEntropyLoss(nn.Module):
     This loss encourages the model to assign high probabilities to *all*
     target tokens specified in the `targets` tensor. It is calculated as the
     negative sum of the log-probabilities of all target tokens.
+
+    This implementation safely handles negative indices (e.g., -100) by
+    ignoring them.
     """
 
     def __init__(self, reduction="none"):
@@ -105,7 +108,8 @@ class MultiTokenCrossEntropyLoss(nn.Module):
         Args:
             logits (torch.Tensor): The raw logits from the model.
                                    Shape: (N, vocab_size)
-            targets (torch.Tensor): The target token IDs.
+            targets (torch.Tensor): The target token IDs. Can contain negative
+                                    indices (e.g. -100), which will be ignored.
                                     Shape: (N, n_branches)
         Returns:
             torch.Tensor: The computed loss.
@@ -115,12 +119,26 @@ class MultiTokenCrossEntropyLoss(nn.Module):
         # Shape: (N, vocab_size)
         log_probs = F.log_softmax(logits, dim=-1)
 
-        # Gather the log-probabilities for each of the n_branches target tokens
+        # 1. Create a mask for valid (non-negative) token IDs
         # Shape: (N, n_branches)
-        target_log_probs = torch.gather(log_probs, dim=-1, index=targets)
+        valid_mask = targets >= 0
+
+        # 2. Clamp targets to avoid out-of-bounds error during gather.
+        # Invalid values (e.g., -100) become 0. We will zero out
+        # their log-probs later using the mask.
+        clamped_targets = targets.clamp(min=0)
+
+        # 3. Gather the log-probabilities. This is now safe.
+        # Shape: (N, n_branches)
+        target_log_probs = torch.gather(log_probs, dim=-1, index=clamped_targets)
+
+        # 4. Zero out the log-probs for all invalid/padded tokens
+        target_log_probs = target_log_probs * valid_mask.to(target_log_probs.dtype)
 
         # [NOTE] Minimizing this loss, L=−∑_{t∈targets}​log(p(t)), will push the model to increase the probability p(t)
         # for every token t in your targets tensor, effectively making them the "top tokens."
+        # Sum the log-probs for all valid tokens
+        # Shape: (N,)
         loss = -torch.sum(target_log_probs, dim=-1)
 
         if self.reduction == "mean":
@@ -425,7 +443,6 @@ class FSDPSoftThinkingSFTTrainer:
         """
         use_sp = self.use_remove_padding and self.config.ulysses_sequence_parallel_size > 1
 
-
         # Move inputs to GPU and prepare loss mask
         # ↓ Shape: (B, S)
         input_tkids = batch["input_tkids"].to(self.device_name)
@@ -461,7 +478,7 @@ class FSDPSoftThinkingSFTTrainer:
 
                 output = self.fsdp_model(
                     input_ids=input_tkids,
-                    input_embeds=thinking_embeds, # This is now correct (B, seq_len, D)
+                    input_embeds=thinking_embeds,  # This is now correct (B, seq_len, D)
                     thinking_mask=thinking_mask,
                     attention_mask=attention_mask,
                     position_ids=position_ids,
@@ -475,10 +492,10 @@ class FSDPSoftThinkingSFTTrainer:
                 shift_labels = labels.contiguous()
                 # ↓ Shape: (B, S - 1)
                 shift_thinking_mask = thinking_mask[:, 1:].contiguous()
-                
+
                 # ↓ Shape: (B, S - 1, K)
                 shift_thinking_tkids = thinking_tkids[:, 1:, :].contiguous()
-                
+
                 # ↓ Shape: (B * (S - 1), V)
                 flat_logits = shift_logits.view(-1, self.model.config.vocab_size)
                 # ↓ Shape: (B * (S - 1),)
@@ -508,9 +525,7 @@ class FSDPSoftThinkingSFTTrainer:
             else:
                 # 1. Unpad all per-token inputs using attention_mask
                 # (B, S) -> (1, T_nnz)
-                input_tkids_rmpad, indices, *_ = unpad_input(
-                    input_tkids.unsqueeze(-1), attention_mask
-                )
+                input_tkids_rmpad, indices, *_ = unpad_input(input_tkids.unsqueeze(-1), attention_mask)
                 input_tkids_rmpad = input_tkids_rmpad.transpose(0, 1)
 
                 # (B, S) -> (1, T_nnz)
@@ -570,7 +585,6 @@ class FSDPSoftThinkingSFTTrainer:
                 )
                 # (1, T_sliced + pad) -> (T_sliced + pad,)
                 thinking_mask_sliced = thinking_mask_rmpad_rolled_sliced.squeeze(0)
-
 
                 # 4. Forward pass
                 output = self.fsdp_model(
@@ -643,7 +657,6 @@ class FSDPSoftThinkingSFTTrainer:
             if do_backward:
                 loss.backward()
             return loss
-
 
     def training_step(self, batch: TensorDict):
         start_time = time.time()
