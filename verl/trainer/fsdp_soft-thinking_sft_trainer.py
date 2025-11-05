@@ -433,9 +433,9 @@ class FSDPSoftThinkingSFTTrainer:
         thinking_embeds = batch["thinking_embeds"].to(self.device_name)
         # ↓ Shape: (B, S, K)
         thinking_tkids = batch["thinking_tkids"].to(self.device_name)
-        # [TODO] We temporarily won't use thinking_probs
-        # ↓ Shape: (B, S, K)
-        ## thinking_probs = batch["thinking_probs"].to(self.device_name)
+        # # [TODO] We temporarily won't use thinking_probs
+        # # ↓ Shape: (B, S, K)
+        # thinking_probs = batch["thinking_probs"].to(self.device_name)
         # ↓ Shape: (B, S)
         thinking_mask = batch["thinking_mask"].to(self.device_name)
         # ↓ Shape: (B, S)
@@ -506,7 +506,127 @@ class FSDPSoftThinkingSFTTrainer:
                 # ↓ Shape: (B * (S-1),)
                 loss = combined_loss * loss_mask.to(combined_loss.device)
             else:
-                raise NotImplementedError("Sequence parallelism is not implemented yet in soft-thinking SFT.")
+                # 1. Unpad all per-token inputs using attention_mask
+                # (B, S) -> (1, T_nnz)
+                input_tkids_rmpad, indices, *_ = unpad_input(
+                    input_tkids.unsqueeze(-1), attention_mask
+                )
+                input_tkids_rmpad = input_tkids_rmpad.transpose(0, 1)
+
+                # (B, S) -> (1, T_nnz)
+                position_ids_rmpad = index_first_axis(
+                    rearrange(position_ids.unsqueeze(-1), "b s ... -> (b s) ..."), indices
+                ).transpose(0, 1)
+
+                # (B, S, E) -> (1, T_nnz, E)
+                thinking_embeds_rmpad = index_first_axis(
+                    rearrange(thinking_embeds, "b s ... -> (b s) ..."), indices
+                ).transpose(0, 1)
+
+                # (B, S, K) -> (1, T_nnz, K)
+                thinking_tkids_rmpad = index_first_axis(
+                    rearrange(thinking_tkids, "b s ... -> (b s) ..."), indices
+                ).transpose(0, 1)
+
+                # (B, S) -> (1, T_nnz)
+                thinking_mask_rmpad = index_first_axis(
+                    rearrange(thinking_mask.unsqueeze(-1), "b s ... -> (b s) ..."), indices
+                ).transpose(0, 1)
+
+                # 2. Pad and Slice inputs for SP Forward Pass
+                sp_size = get_ulysses_sequence_parallel_world_size()
+
+                input_tkids_rmpad_sliced, position_ids_rmpad_padded, pad_size = ulysses_pad_and_slice_inputs(
+                    input_tkids_rmpad, position_ids_rmpad, sp_size=sp_size
+                )
+                thinking_embeds_rmpad_sliced, _, _ = ulysses_pad_and_slice_inputs(
+                    thinking_embeds_rmpad, None, sp_size=sp_size
+                )
+                thinking_mask_rmpad_sliced, _, _ = ulysses_pad_and_slice_inputs(
+                    thinking_mask_rmpad, None, sp_size=sp_size
+                )
+
+                # 3. Create and Slice Labels (by rolling)
+                # Roll all label-related tensors to get targets for next-token prediction
+                input_tkids_rmpad_rolled = torch.roll(input_tkids_rmpad, shifts=-1, dims=1)
+                thinking_tkids_rmpad_rolled = torch.roll(thinking_tkids_rmpad, shifts=-1, dims=1)
+                thinking_mask_rmpad_rolled = torch.roll(thinking_mask_rmpad, shifts=-1, dims=1)
+
+                # Slice the rolled labels
+                input_tkids_rmpad_rolled_sliced, _, _ = ulysses_pad_and_slice_inputs(
+                    input_tkids_rmpad_rolled, None, sp_size
+                )
+                # (1, T_sliced + pad) -> (T_sliced + pad,)
+                labels_sliced = input_tkids_rmpad_rolled_sliced.squeeze(0)
+
+                thinking_tkids_rmpad_rolled_sliced, _, _ = ulysses_pad_and_slice_inputs(
+                    thinking_tkids_rmpad_rolled, None, sp_size
+                )
+                # (1, T_sliced + pad, K) -> (T_sliced + pad, K)
+                thinking_targets_sliced = thinking_tkids_rmpad_rolled_sliced.squeeze(0)
+
+                thinking_mask_rmpad_rolled_sliced, _, _ = ulysses_pad_and_slice_inputs(
+                    thinking_mask_rmpad_rolled, None, sp_size
+                )
+                # (1, T_sliced + pad) -> (T_sliced + pad,)
+                thinking_mask_sliced = thinking_mask_rmpad_rolled_sliced.squeeze(0)
+
+
+                # 4. Forward pass
+                output = self.fsdp_model(
+                    input_ids=input_tkids_rmpad_sliced,
+                    input_embeds=thinking_embeds_rmpad_sliced,
+                    thinking_mask=thinking_mask_rmpad_sliced,
+                    attention_mask=None,  # Not needed with flash attention varlen
+                    position_ids=position_ids_rmpad_padded,
+                    use_cache=False,
+                )
+
+                # 5. Compute loss locally (on sliced tensors)
+                # (1, T_sliced + pad, V) -> (T_sliced + pad, V)
+                logits_rmpad_sliced = output.logits.squeeze(0)
+
+                # Move labels to device
+                labels_sliced = labels_sliced.to(logits_rmpad_sliced.device)
+                thinking_targets_sliced = thinking_targets_sliced.to(logits_rmpad_sliced.device)
+                thinking_mask_sliced = thinking_mask_sliced.to(logits_rmpad_sliced.device)
+
+                # --- Replicate logic from standard branch on SLICED tensors ---
+                # (T_sliced + pad,)
+                standard_loss = loss_fct_1(logits_rmpad_sliced, labels_sliced)
+
+                # (T_local,)
+                thinking_indices = (thinking_mask_sliced == 1).nonzero(as_tuple=True)[0]
+
+                if thinking_indices.numel() > 0:
+                    # (T_local, V)
+                    thinking_logits = logits_rmpad_sliced[thinking_indices]
+                    # (T_local, K)
+                    thinking_targets = thinking_targets_sliced[thinking_indices]
+                    # (T_local,)
+                    thinking_loss_values = loss_fct_2(thinking_logits, thinking_targets)
+                    # (T_sliced + pad,)
+                    combined_loss = standard_loss.clone()
+                    combined_loss[thinking_indices] = thinking_loss_values
+                else:
+                    combined_loss = standard_loss
+
+                # 6. Gather and unpad for sequence parallelism
+                # (T_sliced + pad,) -> gather -> (T_nnz,)
+                loss = gather_outputs_and_unpad(combined_loss, gather_dim=0, unpad_dim=0, padding_size=pad_size)
+
+                # 7. Pad back to 2D
+                # (T_nnz,) -> (B, S)
+                full_loss = pad_input(
+                    hidden_states=loss.unsqueeze(-1), indices=indices, batch=batch_size, seqlen=seq_len
+                )
+                # (B, S) -> (B, S-1) -> (B * (S-1),)
+                full_loss = full_loss.squeeze(-1)[:, :-1]  # Remove last token's loss
+                full_loss = full_loss.reshape(-1)
+
+                # 8. Apply final loss mask
+                loss_mask = loss_mask.to(full_loss.device)
+                loss = full_loss * loss_mask
 
             valid_token_this_rank = torch.sum(loss_mask)
 
