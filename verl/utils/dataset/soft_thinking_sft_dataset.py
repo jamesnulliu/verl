@@ -1,23 +1,3 @@
-# Copyright 2024 Bytedance Ltd. and/or its affiliates
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-"""
-SFT dataset
-- We assume user pass a single parquet file.
-- We load all the data into the memory.
-Each parquet file contains
-"""
-
 import torch
 from datasets import load_from_disk as hf_load_from_disk
 from torch.utils.data import Dataset
@@ -82,48 +62,114 @@ class SoftThinkingSFTDataset(Dataset):
         # ↓ Shape: (seq_len,)
         attention_mask = torch.cat((prompt_attention_mask, response_attention_mask), dim=-1)
 
+        # [TODO] The padding logic should be moved to STPO.tree_search.input_embed_generator
+
         # ↓ Shape: (think_len, embed_dim)
-        thinking_embed_tensor = torch.tensor(sample[self.thinking_embed_key], dtype=torch.float)
+        original_thinking_embed_tensor = torch.tensor(sample[self.thinking_embed_key], dtype=torch.float)
         # ↓ Shape: (think_len, n_branches)
-        thinking_tkids_tensor = torch.tensor(sample[self.thinking_tkids_key], dtype=torch.long)
-        thinking_tkids_tensor = thinking_tkids_tensor[:, : self.n_thinking_branches]
+        original_thinking_tkids_tensor = torch.tensor(sample[self.thinking_tkids_key], dtype=torch.long)
+        original_thinking_tkids_tensor = original_thinking_tkids_tensor[:, : self.n_thinking_branches]
         # ↓ Shape: (think_len, n_branches)
-        thinking_probs_tensor = torch.tensor(sample[self.thinking_probs_key], dtype=torch.float)
-        thinking_probs_tensor = thinking_probs_tensor[:, : self.n_thinking_branches]
-        think_len = thinking_embed_tensor.size(0)
-        # `thinking_embed` only contains the thinking part [t0, t1, ..., tm],
-        # so we need to create a mask for inference:
-        # [p0, p1, ..., pn, <think>, t0, t1, ..., tm, </think>, r0, r1, ..., rk]
+        original_thinking_probs_tensor = torch.tensor(sample[self.thinking_probs_key], dtype=torch.float)
+        original_thinking_probs_tensor = original_thinking_probs_tensor[:, : self.n_thinking_branches]
+        
+        think_len = original_thinking_embed_tensor.size(0)
+        
         think_start = prompt_len + 1  # After the <think> token
         think_end = think_start + think_len  # Before the </think> token
         thinking_mask = torch.zeros_like(attention_mask)
-        thinking_mask[think_start:think_end] = 1
+        # Handle edge case where think_end might be > attention_mask length if response is empty
+        # This shouldn't happen if data is well-formed, but good to be safe.
+        if think_start < attention_mask.size(0):
+            thinking_mask[think_start:min(think_end, attention_mask.size(0))] = 1
+        
+        # This mask must be applied *before* truncation to select the right data
+        pre_trunc_ones_indices = (thinking_mask == 1).nonzero(as_tuple=True)[0]
 
         sequence_length = input_ids.shape[0]
+        
+        # Logic to pad/truncate all sequence-length tensors
+        # and simultaneously prepare the (potentially truncated) thinking data
+
         if sequence_length < self.max_length:
+            pad_len = self.max_length - sequence_length
             padded_input_ids = (
-                torch.ones(size=(self.max_length - sequence_length,), dtype=input_ids.dtype)
+                torch.ones(size=(pad_len,), dtype=input_ids.dtype)
                 * self.tokenizer.pad_token_id
             )
-            padded_attention_mask = torch.zeros(size=(self.max_length - sequence_length,), dtype=attention_mask.dtype)
+            padded_attention_mask = torch.zeros(size=(pad_len,), dtype=attention_mask.dtype)
 
             input_ids = torch.cat((input_ids, padded_input_ids))
             attention_mask = torch.cat((attention_mask, padded_attention_mask))
-            thinking_mask = torch.cat((thinking_mask, padded_attention_mask))
+            thinking_mask = torch.cat((thinking_mask, padded_attention_mask)) # This is the final mask
+            
+            # No truncation, so we use the original thinking data
+            data_thinking_embeds = original_thinking_embed_tensor
+            data_thinking_tkids = original_thinking_tkids_tensor
+            data_thinking_probs = original_thinking_probs_tensor
+
         elif sequence_length > self.max_length:
             if self.truncation == "left":
-                # actually, left truncation may not be reasonable
+                # Find which original thinking tokens survive left truncation
+                trunc_start_idx = sequence_length - self.max_length
+                surviving_indices_mask = pre_trunc_ones_indices >= trunc_start_idx
+                
+                # Truncate the sequence-length tensors
                 input_ids = input_ids[-self.max_length :]
                 attention_mask = attention_mask[-self.max_length :]
-                thinking_mask = thinking_mask[-self.max_length :]
+                thinking_mask = thinking_mask[-self.max_length :] # This is the final mask
+
             elif self.truncation == "right":
+                # Find which original thinking tokens survive right truncation
+                trunc_end_idx = self.max_length
+                surviving_indices_mask = pre_trunc_ones_indices < trunc_end_idx
+                
+                # Truncate the sequence-length tensors
                 input_ids = input_ids[: self.max_length]
                 attention_mask = attention_mask[: self.max_length]
-                thinking_mask = thinking_mask[: self.max_length]
+                thinking_mask = thinking_mask[: self.max_length] # This is the final mask
+
             elif self.truncation == "error":
                 raise NotImplementedError(f"{sequence_length=} is larger than {self.max_length=}")
             else:
                 raise NotImplementedError(f"Unknown truncation method {self.truncation}")
+
+            # Select the surviving thinking data
+            data_thinking_embeds = original_thinking_embed_tensor[surviving_indices_mask]
+            data_thinking_tkids = original_thinking_tkids_tensor[surviving_indices_mask]
+            data_thinking_probs = original_thinking_probs_tensor[surviving_indices_mask]
+        
+        else: # sequence_length == self.max_length
+            # No padding or truncation needed
+            data_thinking_embeds = original_thinking_embed_tensor
+            data_thinking_tkids = original_thinking_tkids_tensor
+            data_thinking_probs = original_thinking_probs_tensor
+        
+        # Initialize with zeros
+        padded_thinking_embeds = torch.zeros(
+            self.max_length, original_thinking_embed_tensor.size(1),
+            dtype=original_thinking_embed_tensor.dtype
+        )
+        padded_thinking_tkids = torch.zeros(
+            self.max_length, original_thinking_tkids_tensor.size(1),
+            dtype=original_thinking_tkids_tensor.dtype
+        )
+        padded_thinking_probs = torch.zeros(
+            self.max_length, original_thinking_probs_tensor.size(1),
+            dtype=original_thinking_probs_tensor.dtype
+        )
+        
+        # Use the final thinking_mask to scatter the (potentially truncated) data
+        if data_thinking_embeds.size(0) > 0:
+            # Check that the number of 1s in the final mask matches the data length
+            assert torch.sum(thinking_mask) == data_thinking_embeds.size(0), \
+                f"Mask sum ({torch.sum(thinking_mask)}) != data len ({data_thinking_embeds.size(0)})"
+
+            padded_thinking_embeds[thinking_mask == 1] = data_thinking_embeds
+            padded_thinking_tkids[thinking_mask == 1] = data_thinking_tkids
+            padded_thinking_probs[thinking_mask == 1] = data_thinking_probs
+            
+        # --- MODIFICATION END ---
 
         position_ids = compute_position_id_with_mask(attention_mask)
 
@@ -137,12 +183,12 @@ class SoftThinkingSFTDataset(Dataset):
         return {
             # ↓ Shape: (seq_len,)
             "input_tkids": input_ids,
-            # ↓ Shape: (think_len, embed_dim)
-            "thinking_embeds": thinking_embed_tensor,
-            # ↓ Shape: (think_len, n_branches)
-            "thinking_tkids": thinking_tkids_tensor,
-            # ↓ Shape: (think_len, n_branches)
-            "thinking_probs": thinking_probs_tensor,
+            # ↓ Shape: (seq_len, embed_dim)
+            "thinking_embeds": padded_thinking_embeds,
+            # ↓ Shape: (seq_len, n_branches)
+            "thinking_tkids": padded_thinking_tkids,
+            # ↓ Shape: (seq_len, n_branches)
+            "thinking_probs": padded_thinking_probs,
             # ↓ Shape: (seq_len,)
             "thinking_mask": thinking_mask,
             # ↓ Shape: (seq_len,)

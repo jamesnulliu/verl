@@ -424,11 +424,11 @@ class FSDPSoftThinkingSFTTrainer:
         # Move inputs to GPU and prepare loss mask
         # ↓ Shape: (batch_size, seq_len,)
         input_tkids = batch["input_tkids"].to(self.device_name)
-        # ↓ Shape: (batch_size, think_len, embed_dim)
+        # ↓ Shape: (batch_size, seq_len, embed_dim)
         thinking_embeds = batch["thinking_embeds"].to(self.device_name)
-        # ↓ Shape: (batch_size, think_len, n_branches)
+        # ↓ Shape: (batch_size, seq_len, n_branches)
         thinking_tkids = batch["thinking_tkids"].to(self.device_name)
-        # ↓ Shape: (batch_size, think_len, n_branches)
+        # ↓ Shape: (batch_size, seq_len, n_branches)
         thinking_probs = batch["thinking_probs"].to(self.device_name)
         # ↓ Shape: (batch_size, seq_len,)
         thinking_mask = batch["thinking_mask"].to(self.device_name)
@@ -439,17 +439,6 @@ class FSDPSoftThinkingSFTTrainer:
 
         n_branches = thinking_tkids.shape[-1]
         batch_size, seq_len = input_tkids.shape
-        # Create a "scatter" tensor for thinking_tkids
-        # Shape: (batch_size, seq_len, n_branches)
-        # Initialize with 0. This is fine because we use the thinking_mask
-        # to select which logits/targets to use.
-        full_thinking_tkids = torch.zeros(
-            batch_size, seq_len, n_branches, dtype=thinking_tkids.dtype, device=self.device_name
-        )
-        # Use the mask to place the packed tokens into the full sequence tensor
-        # This assumes the (B, think_len, N_br) tensor corresponds to the
-        # non-zero elements of thinking_mask in flattened order.
-        full_thinking_tkids[thinking_mask == 1] = thinking_tkids.view(-1, n_branches)
 
         # ↓ Shape: (batch_size, seq_len,)
         loss_mask = batch.pop("loss_mask")[:, 1:].reshape(-1).to(self.device_name)
@@ -466,7 +455,7 @@ class FSDPSoftThinkingSFTTrainer:
 
                 output = self.fsdp_model(
                     input_ids=input_tkids,
-                    input_embeds=thinking_embeds,
+                    input_embeds=thinking_embeds, # This is now correct (B, seq_len, D)
                     thinking_mask=thinking_mask,
                     attention_mask=attention_mask,
                     position_ids=position_ids,
@@ -480,8 +469,10 @@ class FSDPSoftThinkingSFTTrainer:
                 shift_labels = labels.contiguous()
                 # ↓ Shape: (B, S - 1)
                 shift_thinking_mask = thinking_mask[:, 1:].contiguous()
+                
                 # ↓ Shape: (B, S - 1, K)
                 shift_thinking_tkids = thinking_tkids[:, 1:, :].contiguous()
+                
                 # ↓ Shape: (B * (S - 1), V)
                 flat_logits = shift_logits.view(-1, self.model.config.vocab_size)
                 # ↓ Shape: (B * (S - 1),)
@@ -526,6 +517,7 @@ class FSDPSoftThinkingSFTTrainer:
             if do_backward:
                 loss.backward()
             return loss
+
 
     def training_step(self, batch: TensorDict):
         start_time = time.time()
